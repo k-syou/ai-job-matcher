@@ -8,3 +8,4 @@ def fetch_job_posting(job_id: str):
         return response.json()
     else:
         raise ValueError("채용공고를 불러오지 못했습니다.")
+    
