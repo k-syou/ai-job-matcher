@@ -1,10 +1,10 @@
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.schema import HumanMessage, SystemMessage
-# from .settings import OPENAI_API_KEY
+# from app.settings import OPENAI_API_KEY
 from langchain_chroma import Chroma
 import json, os
 from dotenv import load_dotenv
-
+from langchain_ollama import OllamaEmbeddings
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -12,8 +12,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 llm = ChatOpenAI(
     temperature=0.2, model="gpt-4o-mini", openai_api_key=OPENAI_API_KEY
 )
-embedding_llm = OpenAIEmbeddings(api_key=OPENAI_API_KEY, model="text-embedding-3-small")
-
+# embedding_llm = OpenAIEmbeddings(api_key=OPENAI_API_KEY, model="text-embedding-3-small")
+embedding_llm = OllamaEmbeddings(model="nomic-embed-text")
 def analyze_job_with_llm(prompt: str) -> str:
     messages = [
         SystemMessage(content="너는 채용공고와 사용자 정보를 분석하는 전문가야."),
@@ -36,19 +36,25 @@ def analyze_job_with_llm(
 
     messages = [system_message, job_posting_message, user_info_message, request_message]
     response = llm.invoke(messages)
-    print(response.__annotations__.keys())
     return response.content
 
 
 def initialize_vector_store(job_postings: list[dict]):
     embedding_llm = OpenAIEmbeddings(api_key=OPENAI_API_KEY, model="text-embedding-3-small")
-    vector_db = Chroma.from_texts(
-        texts=[job['content'] for job in job_postings],
-        embedding=embedding_llm,
-        metadatas=[{'job_id': job['job_id'], 'title': job['title']} for job in job_postings],
-        collection_name="job_postings",
-        persist_directory="db/job_postings",
-    )
+    vector_db = Chroma(embedding_function=embedding_llm, persist_directory="db/job_postings")
+    # 기존 vector_db가 존재하는지 확인
+    if os.path.exists("db/job_postings"):
+        for job in job_postings:
+            add_job_posting_if_not_exists(vector_db, job)
+    else:
+        vector_db = Chroma.from_texts(
+            texts=[job['content'] for job in job_postings],
+            embedding=embedding_llm,
+            metadatas=[{'job_id': job['job_id'], 'title': job['title']} for job in job_postings],
+            collection_name="job_postings",
+            persist_directory="db/job_postings",
+        )
+    
     return vector_db
 
 
@@ -60,12 +66,24 @@ def get_job_posting_text(vector_db:Chroma, job_id: str):
         return None
 
 
+def add_job_posting_if_not_exists(vector_db: Chroma, job_posting: dict):
+    job_id = job_posting['job_id']
+    existing_job = vector_db.similarity_search(query="", k=1, filter={"job_id": job_id})
+    
+    if not existing_job:
+        print("새로운 데이터 추가")
+        # 새로운 데이터 추가
+        vector_db.add_texts(
+            texts=[job_posting['content']],
+            metadatas=[{'job_id': job_id, 'title': job_posting['title']}]
+        )
+
+
 if __name__ == "__main__":
     read_json = open("app/text_data/job_posting.json", "r", encoding="utf-8")
     job_postings = json.load(read_json)
     vector_db = initialize_vector_store(job_postings)
     job_posting_text = get_job_posting_text(vector_db, "job001")
-    print(job_posting_text)
     sample_user_info = {
         "skills": "Python, Django 경험",
         "experience_years": "3",
